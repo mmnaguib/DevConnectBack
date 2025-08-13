@@ -4,7 +4,7 @@ const userSchema = new mongoose.Schema(
   {
     firstName: { type: String },
     lastName: { type: String },
-    name: { type: String },
+    name: { type: String, unique: true, trim: true },
     email: {
       type: String,
       required: true,
@@ -21,6 +21,14 @@ const userSchema = new mongoose.Schema(
     website: { type: String },
     github: { type: String },
     linkedin: { type: String },
+
+    // 🆕 إضافات جديدة
+    company: { type: String },
+    jobType: { type: String }, // full-time, part-time, freelance
+    education: { type: String },
+    address: { type: String },
+    phone: { type: String },
+    birthDate: { type: Date },
     joinDate: { type: Date, default: Date.now },
     lastActive: { type: Date },
     followersCount: { type: Number, default: 0 },

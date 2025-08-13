@@ -27,47 +27,67 @@ function createRefreshToken(user) {
   });
   return token;
 }
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "uploads/"); // فولدر رفع الصور (اتأكد إنه موجود)
+  },
+  filename: function (req, file, cb) {
+    // اسم الملف يكون timestamp + الاسم الأصلي
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
 
-// REGISTER
-router.post("/register", async (req, res) => {
+const upload = multer({ storage });
+
+const generateRandomName = () => {
+  return `user_${Math.floor(1000 + Math.random() * 9000)}`;
+};
+
+router.post("/register", upload.single("avatar"), async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ message: "Email and password required" });
+    const { email, password, firstName, lastName, name, ...rest } = req.body;
 
-    const existing = await User.findOne({ email });
-    if (existing)
-      return res.status(409).json({ message: "Email already used" });
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashed = await bcrypt.hash(password, salt);
+    // تحقق من الاسم
+    if (name) {
+      const existingName = await User.findOne({ name });
+      if (existingName) {
+        return res.status(400).json({ message: "Name already taken" });
+      }
+    }
 
-    const user = new User({ email, password: hashed }); // باقي الحقول فاضية
+    // توليد الاسم لو مش موجود
+    const finalName = name || generateRandomName();
+
+    // تشفير الباسورد
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // لو فيه صورة مرفوعة
+    let avatarUrl = "";
+    if (req.file) {
+      avatarUrl = `/uploads/${req.file.filename}`;
+    }
+
+    // إنشاء المستخدم
+    const user = new User({
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      name: finalName,
+      avatarUrl,
+      ...rest,
+    });
+
     await user.save();
 
-    const accessToken = createAccessToken(user);
-    const refreshTokenValue = createRefreshToken(user);
-    const expiresAt = new Date(Date.now() + parseDurationToMs(REFRESH_EXPIRES));
-
-    const refreshTokenDoc = new RefreshToken({
-      token: refreshTokenValue,
-      user: user._id,
-      expiresAt,
-    });
-    await refreshTokenDoc.save();
-
     res
-      .cookie("refreshToken", refreshTokenValue, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        expires: expiresAt,
-      })
       .status(201)
-      .json({
-        user: { id: user._id, email: user.email },
-        accessToken,
-      });
+      .json({ message: "User registered successfully", user: user });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -191,46 +211,52 @@ router.post("/logout", async (req, res) => {
   }
 });
 
-// protected sample route
 router.get("/me", authenticate, async (req, res) => {
-  const user = await User.findById(req.userId).select("-password");
-  res.json({ user });
+  try {
+    const user = await User.findById(req.userId).select("-password -__v"); // شيل الحقول اللي مش محتاجها بس
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
 });
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/"); // فولدر رفع الصور (اتأكد إنه موجود)
-  },
-  filename: function (req, file, cb) {
-    // اسم الملف يكون timestamp + الاسم الأصلي
-    cb(null, Date.now() + path.extname(file.originalname));
-  },
-});
-
-const upload = multer({ storage });
-
-// مثال تحديث بيانات المستخدم مع صورة أفاتار
 router.put(
-  "/profile",
+  "/update",
   authenticate,
-  upload.single("avatar"), // "avatar" هو اسم الحقل للملف من الفورم
+  upload.single("avatar"),
   async (req, res) => {
     try {
-      const { firstName, lastName, email, bio, ...otherFields } = req.body;
-      let avatarUrl;
+      const userId = req.userId; // جاي من التوكين بعد authenticate
 
+      // ناخد كل الداتا اللي جاية من الفورم
+      const updateData = { ...req.body };
+
+      // لو فيه صورة جديدة، نحط اللينك
       if (req.file) {
-        avatarUrl = `/uploads/${req.file.filename}`;
+        updateData.avatarUrl = `/uploads/avatars/${req.file.filename}`;
       }
+
+      // تحديث المستخدم
+      const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+        new: true,
+      });
+
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
       res.json({
-        success: true,
         message: "Profile updated successfully",
-        avatarUrl,
-        // updatedUser,
+        user: updatedUser,
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ success: false, message: "Server error" });
+      console.error("Update error:", error);
+      res.status(500).json({ message: "Server error" });
     }
   }
 );
